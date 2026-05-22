@@ -1,0 +1,23 @@
+{
+  "name": "wispnodes",
+  "version": "1.0.0",
+  "description": "Standalone PM2-backed Node app manager with optional Cloudflare tunnel control.",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "install-apps": "node scripts/install-apps.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-pty": "^1.0.0",
+    "pm2": "^6.0.8",
+    "ws": "^8.18.0"
+  }
+}

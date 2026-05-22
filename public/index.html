@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WispNodes</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <svg class="logo-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <polygon points="10,2 18,7 18,13 10,18 2,13 2,7" stroke="currentColor" stroke-width="1.5" fill="none"/>
+        <circle cx="10" cy="10" r="2.5" fill="currentColor"/>
+      </svg>
+      <span class="brand">WispNodes</span>
+      <span id="conn" class="conn conn-connecting">connecting</span>
+    </div>
+    <div class="topbar-right">
+      <span id="cf-badge" class="cf-status-text" hidden></span>
+      <button id="btn-cf-start" type="button" class="btn btn-sm" hidden>Start Tunnel</button>
+      <button id="btn-cf-stop"  type="button" class="btn btn-sm btn-ghost" hidden>Stop Tunnel</button>
+      <div class="topbar-sep"></div>
+      <button id="btn-health" type="button" class="btn btn-sm btn-ghost" title="Setup health &amp; diagnostics">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+          <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+        </svg>
+        Health
+      </button>
+      <button id="btn-new-term" type="button" class="btn btn-sm btn-ghost" title="Open terminal (Ctrl+`)">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h11A1.5 1.5 0 0 1 15 2.5v11a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 13.5v-11zm4.854 3.646a.5.5 0 1 0-.708.708L6.793 8l-1.647 1.646a.5.5 0 0 0 .708.708l2-2a.5.5 0 0 0 0-.708l-2-2zM8.5 10.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3z"/>
+        </svg>
+        Terminal
+      </button>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <!-- ── Sidebar ─────────────────────────────────────── -->
+    <aside class="sidebar">
+
+      <section class="panel">
+        <h2 class="panel-title">Start Process</h2>
+        <form id="form-start" novalidate>
+          <div class="field">
+            <label for="i-name">Name</label>
+            <input id="i-name" name="name" type="text" placeholder="my-app" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="i-cwd">Directory <em>optional</em></label>
+            <input id="i-cwd" name="cwd" type="text" placeholder="apps/my-app" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="i-cmd">Command <em>optional</em></label>
+            <input id="i-cmd" name="command" type="text" placeholder="npm start" autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="i-port">Port <em>optional</em></label>
+            <input id="i-port" name="port" type="number" placeholder="3001" min="1" max="65535" autocomplete="off">
+          </div>
+          <button id="btn-start-submit" type="submit" class="btn btn-primary btn-block">Start Process</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Discovered Apps</h2>
+          <span id="apps-dir-hint" class="panel-hint"></span>
+        </div>
+        <div id="discovered" class="item-list"></div>
+      </section>
+
+      <section class="panel" id="cf-panel" hidden>
+        <h2 class="panel-title">Tunnel Logs</h2>
+        <pre id="cf-logs" class="log-mini"></pre>
+      </section>
+
+    </aside>
+
+    <!-- ── Main ────────────────────────────────────────── -->
+    <main class="main">
+
+      <section class="panel" id="processes-panel">
+        <div class="panel-header">
+          <h2 class="panel-title">Processes</h2>
+          <span id="proc-count" class="count-badge">0</span>
+        </div>
+        <div id="processes" class="process-grid"></div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ── Bottom terminal/log panel ───────────────────── -->
+  <div id="bottom-panel" class="bottom-panel" hidden>
+    <div id="resize-handle" class="resize-handle"></div>
+    <div class="tab-bar" id="tab-bar">
+      <!-- tabs injected by JS -->
+    </div>
+    <div class="tab-content" id="tab-content">
+      <!-- panes injected by JS -->
+    </div>
+  </div>
+
+  <div id="toasts" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
