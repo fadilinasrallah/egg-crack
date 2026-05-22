@@ -19,8 +19,8 @@ const ROOT      = process.cwd();
 const APPS_DIR  = path.resolve(ROOT, process.env.APPS_DIR  || "apps");
 const DATA_DIR  = path.resolve(ROOT, process.env.DATA_DIR  || "data");
 const PM2_HOME  = path.resolve(ROOT, process.env.PM2_HOME  || path.join("data", ".pm2"));
-const AUTH_USER = process.env.DASHBOARD_USERNAME || "";
-const AUTH_PASS = process.env.DASHBOARD_PASSWORD || "";
+const AUTH_USER = (process.env.DASHBOARD_USERNAME || "").trim();
+const AUTH_PASS = (process.env.DASHBOARD_PASSWORD || "").trim();
 const CF_ONLY   = process.env.CF_ONLY === "1";
 
 // ── Cloudflare IP ranges (https://www.cloudflare.com/ips/) ───────────────────
