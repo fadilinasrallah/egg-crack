@@ -113,15 +113,18 @@ let broadcasting = false;
 let syncing      = false;
 
 app.get("/api/stream", (req, res) => {
-  res.setHeader("Content-Type",  "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection",    "keep-alive");
+  res.setHeader("Content-Type",      "text/event-stream");
+  res.setHeader("Cache-Control",     "no-cache");
+  res.setHeader("Connection",        "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
   const client = { res };
   sseClients.add(client);
   getState().then(s => sseSend(client, "state", s)).catch(() => {});
-  req.on("close", () => sseClients.delete(client));
+
+  const hb = setInterval(() => { try { res.write(": h\n\n"); } catch { clearInterval(hb); } }, 15000);
+  req.on("close", () => { sseClients.delete(client); clearInterval(hb); });
 });
 
 function sseSend(client, event, data) {
