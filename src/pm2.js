@@ -52,7 +52,6 @@ class Pm2Manager {
 
   _shape(raw) {
     const env  = raw.pm2_env || {};
-    const vars = (env.env && typeof env.env === "object") ? env.env : {};
     return {
       name:     raw.name,
       pid:      raw.pid || null,
@@ -60,7 +59,7 @@ class Pm2Manager {
       restarts: env.restart_time || 0,
       uptime:   env.pm_uptime || null,
       cwd:      env.pm_cwd ? this._rel(env.pm_cwd) : "",
-      port:     vars.PORT ? String(vars.PORT) : "",
+      port:     _portsForPid(raw.pid).join(", "),
       cpu:      raw.monit ? raw.monit.cpu    : 0,
       memory:   raw.monit ? raw.monit.memory : 0,
       outLog:   env.pm_out_log_path || "",
@@ -218,6 +217,64 @@ class Pm2Manager {
     return fs.readFileSync(file, "utf8")
       .split(/\r?\n/).filter(Boolean).slice(-n).join("\n");
   }
+}
+
+// Walk /proc to find all descendant PIDs of a root PID (handles npm -> node spawns).
+function _procTree(rootPid) {
+  const tree = new Set([rootPid]);
+  try {
+    const all = fs.readdirSync("/proc").filter(d => /^\d+$/.test(d)).map(Number);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const pid of all) {
+        if (tree.has(pid)) continue;
+        try {
+          const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+          const m = status.match(/^PPid:\s*(\d+)/m);
+          if (m && tree.has(Number(m[1]))) { tree.add(pid); changed = true; }
+        } catch { }
+      }
+    }
+  } catch { }
+  return tree;
+}
+
+// Read listening TCP ports for a process tree via /proc — no external tools needed.
+function _portsForPid(pid) {
+  if (!pid || process.platform !== "linux") return [];
+
+  // Collect socket inodes for the entire process subtree (npm -> node -> ...).
+  const inodes = new Set();
+  for (const p of _procTree(pid)) {
+    try {
+      for (const fd of fs.readdirSync(`/proc/${p}/fd`)) {
+        try {
+          const link = fs.readlinkSync(`/proc/${p}/fd/${fd}`);
+          const m = link.match(/^socket:\[(\d+)\]$/);
+          if (m) inodes.add(m[1]);
+        } catch { }
+      }
+    } catch { }
+  }
+
+  if (!inodes.size) return [];
+
+  // Match inodes against LISTEN entries in /proc/net/tcp and /proc/net/tcp6.
+  const ports = [];
+  for (const f of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    try {
+      for (const line of fs.readFileSync(f, "utf8").split("\n").slice(1)) {
+        const cols = line.trim().split(/\s+/);
+        if (cols.length < 10) continue;
+        if (cols[3] !== "0A") continue; // 0A = TCP_LISTEN
+        if (!inodes.has(cols[9])) continue;
+        const port = parseInt(cols[1].split(":").pop(), 16);
+        if (port > 0 && !ports.includes(port)) ports.push(port);
+      }
+    } catch { }
+  }
+  return ports;
 }
 
 module.exports = { Pm2Manager };
