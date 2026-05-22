@@ -67,7 +67,7 @@ class Pm2Manager {
     };
   }
 
-  _shell(command, cwd) {
+  _shell(command, cwd, appEnv = null) {
     if (this.useUserland) {
       const enter = path.join(this.userlandDir, "enter.sh");
       if (!fs.existsSync(enter)) throw new Error("Userland enter.sh not found.");
@@ -80,6 +80,12 @@ class Pm2Manager {
       return { cwd, script: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", command] };
     }
     const sh = fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh";
+    if (appEnv) {
+      // Use env -i so the child process gets only the vars we explicitly pass,
+      // bypassing PM2's internal env inheritance from process.env.
+      const pairs = Object.entries(appEnv).map(([k, v]) => `${k}=${_q(v)}`).join(" ");
+      return { cwd: "/", script: sh, args: ["-c", `cd ${_q(cwd)} && exec env -i ${pairs} sh -c ${_q(command)}`] };
+    }
     return { cwd, script: sh, args: [sh.endsWith("bash") ? "-lc" : "-c", command] };
   }
 
@@ -147,16 +153,15 @@ class Pm2Manager {
     const command = String(def.command || this._infer(cwd)).trim();
     if (!command) throw new Error(`No start command for "${name}". Add a package.json start script or specify a command.`);
 
-    const sh     = this._shell(command, cwd);
+    const appEnv = _appEnv({ PM2_HOME: this.pm2Home, BASE_DIR: cwd });
+    if (def.port) appEnv.PORT = String(def.port);
+    if (def.env && typeof def.env === "object") {
+      for (const [k, v] of Object.entries(def.env)) { if (k) appEnv[k] = String(v); }
+    }
+
+    const sh     = this._shell(command, cwd, appEnv);
     const outLog = path.join(this.logsDir, `${name}-out.log`);
     const errLog = path.join(this.logsDir, `${name}-err.log`);
-    const env    = { ...process.env, PM2_HOME: this.pm2Home, BASE_DIR: cwd };
-    delete env.PORT;
-
-    if (def.port) env.PORT = String(def.port);
-    if (def.env && typeof def.env === "object") {
-      for (const [k, v] of Object.entries(def.env)) { if (k) env[k] = String(v); }
-    }
 
     return this._use(async () => {
       const existing = await this._call("describe", name);
@@ -172,8 +177,7 @@ class Pm2Manager {
         merge_logs:  false,
         autorestart: true,
         restart_delay: 3000,
-        max_restarts:  10,
-        env
+        max_restarts:  10
       });
       const desc = await this._call("describe", name);
       return desc.map(p => this._shape(p))[0] || null;
@@ -217,6 +221,24 @@ class Pm2Manager {
     return fs.readFileSync(file, "utf8")
       .split(/\r?\n/).filter(Boolean).slice(-n).join("\n");
   }
+}
+
+// Shell-safe single-quote wrapping.
+const _q = s => "'" + String(s).replace(/'/g, "'\\''") + "'";
+
+// Build a clean env for managed apps — whitelist only system vars, never leak dashboard credentials.
+const _APP_ENV_PASSTHROUGH = new Set([
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+  "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ",
+  "TERM", "NODE_ENV", "NODE_PATH",
+  "npm_config_cache", "npm_config_prefix"
+]);
+function _appEnv(extra = {}) {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (_APP_ENV_PASSTHROUGH.has(k)) env[k] = v;
+  }
+  return { ...env, ...extra };
 }
 
 // Walk /proc to find all descendant PIDs of a root PID (handles npm -> node spawns).
