@@ -1,6 +1,6 @@
 node_modules/
+apps/*/node_modules/
 data/
-apps/
 .env
 .cache/
 .npm/

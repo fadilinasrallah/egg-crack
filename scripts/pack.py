@@ -7,14 +7,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 
-EXCLUDE_DIRS  = {"node_modules", "data", "apps", ".git", ".cache", ".npm", ".pm2", ".claude", "scripts"}
+EXCLUDE_DIRS  = {"node_modules", "data", ".git", ".cache", ".npm", ".pm2", ".claude", "scripts"}
 EXCLUDE_FILES = {".env"}
 EXCLUDE_EXT   = {".zip"}
 
 def should_include(path: Path) -> bool:
     rel = path.relative_to(ROOT)
     parts = rel.parts
-    if any(p in EXCLUDE_DIRS for p in parts[:-1]):
+    # Exclude top-level dirs in EXCLUDE_DIRS
+    if parts[0] in EXCLUDE_DIRS:
+        return False
+    # Exclude node_modules inside any app subdirectory
+    if "node_modules" in parts:
         return False
     if path.is_file():
         if path.name in EXCLUDE_FILES:
