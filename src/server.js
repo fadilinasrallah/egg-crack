@@ -396,7 +396,7 @@ async function syncApps() {
 }
 
 async function getState() {
-  const [procs, discovered] = await Promise.all([pm2.list(), Promise.resolve(pm2.discover())]);
+  const [procs, discovered] = await Promise.all([pm2.list().catch(() => []), Promise.resolve(pm2.discover())]);
   const running = new Set(procs.map(p => p.name));
   return {
     processes: procs,

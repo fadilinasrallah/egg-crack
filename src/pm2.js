@@ -19,7 +19,10 @@ class Pm2Manager {
   }
 
   async _use(fn) {
-    await new Promise((res, rej) => pm2lib.connect(err => err ? rej(err) : res()));
+    await new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error("PM2 connect timeout")), 5000);
+      pm2lib.connect(err => { clearTimeout(t); err ? rej(err) : res(); });
+    });
     try   { return await fn(); }
     finally { pm2lib.disconnect(); }
   }
