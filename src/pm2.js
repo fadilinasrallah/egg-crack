@@ -152,6 +152,7 @@ class Pm2Manager {
     const outLog = path.join(this.logsDir, `${name}-out.log`);
     const errLog = path.join(this.logsDir, `${name}-err.log`);
     const env    = { ...process.env, PM2_HOME: this.pm2Home, BASE_DIR: cwd };
+    delete env.PORT;
 
     if (def.port) env.PORT = String(def.port);
     if (def.env && typeof def.env === "object") {

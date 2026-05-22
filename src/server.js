@@ -111,6 +111,7 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 const sseClients = new Set();
 let broadcasting = false;
 let syncing      = false;
+let cachedState  = null;
 
 app.get("/api/stream", (req, res) => {
   res.setHeader("Content-Type",      "text/event-stream");
@@ -121,7 +122,9 @@ app.get("/api/stream", (req, res) => {
 
   const client = { res };
   sseClients.add(client);
-  getState().then(s => sseSend(client, "state", s)).catch(() => {});
+  // Send cached state immediately if available, then fetch fresh.
+  if (cachedState) sseSend(client, "state", cachedState);
+  getState().then(s => { cachedState = s; sseSend(client, "state", s); }).catch(() => {});
 
   const hb = setInterval(() => { try { res.write(": h\n\n"); } catch { clearInterval(hb); } }, 15000);
   req.on("close", () => { sseClients.delete(client); clearInterval(hb); });
@@ -136,6 +139,7 @@ async function broadcast() {
   broadcasting = true;
   try {
     const state = await getState();
+    cachedState = state;
     for (const c of sseClients) sseSend(c, "state", state);
   } catch { } finally { broadcasting = false; }
 }
