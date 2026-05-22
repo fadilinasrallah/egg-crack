@@ -18,13 +18,21 @@ class Pm2Manager {
     fs.mkdirSync(logsDir,  { recursive: true });
   }
 
-  async _use(fn) {
-    await new Promise((res, rej) => {
-      const t = setTimeout(() => rej(new Error("PM2 connect timeout")), 8000);
-      pm2lib.connect(true, err => { clearTimeout(t); err ? rej(err) : res(); });
+  _connect() {
+    if (this._conn) return this._conn;
+    this._conn = new Promise((res, rej) => {
+      const t = setTimeout(() => { this._conn = null; rej(new Error("PM2 connect timeout")); }, 8000);
+      pm2lib.connect(true, err => {
+        clearTimeout(t);
+        if (err) { this._conn = null; rej(err); } else { res(); }
+      });
     });
-    try   { return await fn(); }
-    finally { pm2lib.disconnect(); }
+    return this._conn;
+  }
+
+  async _use(fn) {
+    await this._connect();
+    return fn();
   }
 
   _call(method, ...args) {
