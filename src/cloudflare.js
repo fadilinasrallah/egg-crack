@@ -55,7 +55,7 @@ class CloudflareManager {
     const startedAt = Date.now();
     const child = spawn(
       this._binPath,
-      ["tunnel", "--token", token],
+      ["tunnel", "run", "--token", token],
       { stdio: ["ignore", "pipe", "pipe"] }
     );
     this._proc = child;
