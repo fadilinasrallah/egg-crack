@@ -1,3 +1,8 @@
 node_modules/
 data/
+apps/
 .env
+.cache/
+.npm/
+.pm2/
+*.zip
