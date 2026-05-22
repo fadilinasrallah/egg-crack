@@ -452,6 +452,8 @@ function cfOnly(req, res, next) {
 
 function auth(req, res, next) {
   if (!AUTH_USER || !AUTH_PASS) return next();
+  const ip = req.socket.remoteAddress || "";
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1") return next();
   const header = req.headers.authorization || "";
   if (!header.startsWith("Basic ")) {
     res.setHeader("WWW-Authenticate", 'Basic realm="WispNodes"');
