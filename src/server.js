@@ -226,16 +226,6 @@ app.get("/api/processes/:name/logs", async (req, res) => {
 });
 
 // ── Cloudflare API ────────────────────────────────────────────────────────────
-app.post("/api/cloudflare/start", async (_req, res) => {
-  try   { const s = await cf.start(); broadcast(); res.json(s); }
-  catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.post("/api/cloudflare/stop", (_req, res) => {
-  try   { const s = cf.stop(); broadcast(); res.json(s); }
-  catch (err) { res.status(400).json({ error: err.message }); }
-});
-
 // ── WebSocket — PTY terminal sessions ─────────────────────────────────────────
 const termWss = new WebSocketServer({ noServer: true });
 

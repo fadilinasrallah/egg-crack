@@ -4,8 +4,6 @@
   // ── DOM ───────────────────────────────────────────────────────────────────
   const connEl       = document.getElementById("conn");
   const cfBadge      = document.getElementById("cf-badge");
-  const btnCfStart   = document.getElementById("btn-cf-start");
-  const btnCfStop    = document.getElementById("btn-cf-stop");
   const cfPanel      = document.getElementById("cf-panel");
   const cfLogs       = document.getElementById("cf-logs");
   const formStart    = document.getElementById("form-start");
@@ -139,10 +137,6 @@
     const running    = Boolean(cf.running);
     const external   = Boolean(cf.external);
 
-    // CF controls only shown if a token is configured and it's NOT externally managed.
-    btnCfStart.hidden = !configured || external || running;
-    btnCfStop.hidden  = !configured || external || !running;
-
     cfBadge.hidden = false;
     if (!configured && !running) {
       cfBadge.hidden = true;
@@ -237,17 +231,6 @@
       toast(`Started ${payload.name}`, "success");
     });
   });
-
-  // ── Cloudflare buttons ────────────────────────────────────────────────────
-  btnCfStart.addEventListener("click", () => withBtn(btnCfStart, async () => {
-    await call("POST", "/api/cloudflare/start");
-    toast("Tunnel started.", "success");
-  }));
-
-  btnCfStop.addEventListener("click", () => withBtn(btnCfStop, async () => {
-    await call("POST", "/api/cloudflare/stop");
-    toast("Tunnel stopped.", "info");
-  }));
 
   // ── Health button ─────────────────────────────────────────────────────────
   btnHealth.addEventListener("click", () => openHealthTab());
