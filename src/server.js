@@ -21,6 +21,31 @@ const DATA_DIR  = path.resolve(ROOT, process.env.DATA_DIR  || "data");
 const PM2_HOME  = path.resolve(ROOT, process.env.PM2_HOME  || path.join("data", ".pm2"));
 const AUTH_USER = process.env.DASHBOARD_USERNAME || "";
 const AUTH_PASS = process.env.DASHBOARD_PASSWORD || "";
+const CF_ONLY   = process.env.CF_ONLY === "1";
+
+// ── Cloudflare IP ranges (https://www.cloudflare.com/ips/) ───────────────────
+const CF_CIDRS = [
+  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+  "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+  "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15",  "104.16.0.0/13",
+  "104.24.0.0/14",   "172.64.0.0/13",   "131.0.72.0/22"
+];
+
+function _ipToInt(ip) {
+  return ip.split(".").reduce((n, o) => (n << 8) | Number(o), 0) >>> 0;
+}
+function _inCidr(ip, cidr) {
+  const [base, bits] = cidr.split("/");
+  const mask = bits === "32" ? 0xffffffff : ~((1 << (32 - +bits)) - 1) >>> 0;
+  return (_ipToInt(ip) & mask) >>> 0 === (_ipToInt(base) & mask) >>> 0;
+}
+function isCloudflareTrusted(rawIp) {
+  // localhost = cloudflared tunnel proxy running in the same container
+  if (!rawIp) return false;
+  const ip = rawIp.startsWith("::ffff:") ? rawIp.slice(7) : rawIp;
+  if (ip === "127.0.0.1" || ip === "::1") return true;
+  return CF_CIDRS.some(cidr => _inCidr(ip, cidr));
+}
 
 // One-time token used to authenticate WebSocket terminal connections.
 const TERM_TOKEN = crypto.randomBytes(20).toString("hex");
@@ -78,6 +103,7 @@ const server = http.createServer(app);
 
 app.disable("x-powered-by");
 app.use(express.json({ limit: "1mb" }));
+app.use(cfOnly);
 app.use(auth);
 app.use(express.static(path.join(__dirname, "..", "public")));
 
@@ -421,6 +447,14 @@ function merge(a, b) {
   const base = (a && typeof a === "object" && !Array.isArray(a)) ? a : {};
   const next = (b && typeof b === "object" && !Array.isArray(b)) ? b : {};
   return { ...base, ...next };
+}
+
+function cfOnly(req, res, next) {
+  if (!CF_ONLY) return next();
+  const ip = req.socket.remoteAddress || "";
+  if (isCloudflareTrusted(ip)) return next();
+  slog("warn", `Blocked non-CF request from ${ip} ${req.method} ${req.path}`);
+  res.status(403).send("Access restricted to Cloudflare network.");
 }
 
 function auth(req, res, next) {
