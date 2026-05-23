@@ -343,9 +343,9 @@ input::placeholder { color: var(--subtle); }
 }
 
 /* Shell pane — xterm fills it */
-.tab-pane.shell-pane { padding: 4px; background: #0d1117; }
+.tab-pane.shell-pane { padding: 0; background: #0d1117; }
 .tab-pane.shell-pane .xterm { height: 100%; }
-.tab-pane.shell-pane .xterm-viewport { overflow-y: hidden !important; }
+.tab-pane.shell-pane .xterm-screen { height: 100%; }
 
 /* ── Health pane ─────────────────────────────────────── */
 .tab-pane.health-pane { flex-direction: column; overflow: hidden; }
@@ -436,6 +436,77 @@ input::placeholder { color: var(--subtle); }
 .toast-error   { background: rgba(30,6,6,0.94);  border: 1px solid rgba(248,81,73,0.35);  color: #ffd0ce; }
 .toast-success { background: rgba(6,26,12,0.94); border: 1px solid rgba(63,185,80,0.35);  color: #c3f0cc; }
 .toast-info    { background: rgba(6,14,28,0.94); border: 1px solid rgba(88,166,255,0.25); color: #b0d0ff; }
+
+/* ── Process table ───────────────────────────────────── */
+.proc-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 3px;
+}
+
+.proc-table thead th {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.07em; color: var(--subtle);
+  padding: 2px 8px 6px; text-align: left;
+  border-bottom: 1px solid var(--border-soft);
+}
+.proc-table thead th.ta-r { text-align: right; }
+
+.proc-table tbody td {
+  padding: 5px 8px;
+  background: var(--bg);
+  border-top: 1px solid var(--border-soft);
+  border-bottom: 1px solid var(--border-soft);
+  transition: border-color 0.12s;
+}
+.proc-table tbody td:first-child {
+  border-left: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+.proc-table tbody td:last-child {
+  border-right: 1px solid var(--border-soft);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.proc-table tbody tr:hover td { border-color: var(--border); }
+
+.proc-td-dot  { width: 28px; text-align: center; }
+.proc-td-btns { white-space: nowrap; }
+
+.proc-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; justify-self: center;
+}
+.dot-online    { background: var(--green);  box-shadow: 0 0 5px rgba(63,185,80,0.55); }
+.dot-stopped   { background: var(--subtle); }
+.dot-errored   { background: var(--red); }
+.dot-launching {
+  background: var(--yellow);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(210,153,34,0.6); }
+  50%       { opacity: 0.4; box-shadow: none; }
+}
+
+.proc-metric {
+  font-size: 12px; color: var(--text); text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.proc-metric.dim { color: var(--subtle); }
+
+.proc-restarts {
+  font-size: 12px; color: var(--muted); text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.proc-btns { display: flex; gap: 3px; justify-content: flex-end; flex-shrink: 0; }
+
+.btn-pty {
+  background: var(--blue-dim);
+  border-color: rgba(88,166,255,0.3);
+  color: var(--blue);
+}
+.btn-pty:hover:not(:disabled) { background: rgba(88,166,255,0.2); }
 
 /* ── Responsive ─────────────────────────────────────── */
 @media (max-width: 860px) {

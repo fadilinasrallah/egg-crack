@@ -12,6 +12,7 @@ const { WebSocketServer } = require("ws");
 
 const { Pm2Manager }       = require("./pm2");
 const { CloudflareManager } = require("./cloudflare");
+const { PtyManager }        = require("./pty-manager");
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const PORT      = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
@@ -94,8 +95,34 @@ const cf = new CloudflareManager({
   onLog:       msg => String(msg).split(/\r?\n/).filter(Boolean).forEach(l => slog("cf", l))
 });
 
+const ptym = new PtyManager({
+  root:    ROOT,
+  logsDir: path.join(DATA_DIR, "logs"),
+});
+
 const configFile = path.join(DATA_DIR, "config.json");
 let config = readConfig();
+
+// ── Harden environment ────────────────────────────────────────────────────────
+// Strip everything from process.env that managed apps should not inherit.
+// All sensitive values (DASHBOARD_PASSWORD, CF_TUNNEL_TOKEN, Pterodactyl vars,
+// etc.) have already been read into JS constants above. Removing them here
+// ensures no child process — regardless of how it is launched — can ever see
+// them. PM2_HOME is kept temporarily; _connect() removes it after PM2 connects.
+(function _hardenEnv() {
+  const KEEP = new Set([
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL",
+    "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ",
+    "TERM", "NODE_ENV", "NODE_PATH", "NODE_VERSION",
+    "npm_config_cache", "npm_config_prefix",
+    "TMPDIR", "TEMP", "TMP",
+    "XDG_RUNTIME_DIR",
+    "PM2_HOME",  // removed from process.env after PM2 connects
+  ]);
+  for (const k of Object.keys(process.env)) {
+    if (!KEEP.has(k)) delete process.env[k];
+  }
+})();
 
 // ── Express app ───────────────────────────────────────────────────────────────
 const app    = express();
@@ -108,10 +135,11 @@ app.use(auth);
 app.use(express.static(path.join(__dirname, "..", "public")));
 
 // ── SSE — real-time state stream ──────────────────────────────────────────────
-const sseClients = new Set();
-let broadcasting = false;
-let syncing      = false;
-let cachedState  = null;
+const sseClients  = new Set();
+const _installing = new Set(); // names of apps currently running npm install
+let broadcasting  = false;
+let syncing       = false;
+let cachedState   = null;
 
 app.get("/api/stream", (req, res) => {
   res.setHeader("Content-Type",      "text/event-stream");
@@ -177,18 +205,60 @@ app.get("/api/health", async (req, res) => {
 // ── Process API ───────────────────────────────────────────────────────────────
 app.post("/api/processes/:name/start", async (req, res) => {
   try {
-    const name   = req.params.name;
-    const saved  = config.processes[name] || {};
-    const def    = {
+    const name        = req.params.name;
+    const saved       = config.processes[name] || {};
+    const interactive = Boolean(req.body.interactive ?? saved.interactive ?? false);
+    const def         = {
       name,
-      cwd:     str(req.body.cwd     || saved.cwd     || path.join("apps", name)),
-      command: str(req.body.command || saved.command),
-      port:    str(req.body.port    || saved.port),
-      env:     merge(saved.env, req.body.env)
+      cwd:         str(req.body.cwd     || saved.cwd     || path.join("apps", name)),
+      command:     str(req.body.command || saved.command),
+      port:        str(req.body.port    || saved.port),
+      env:         merge(saved.env, req.body.env),
+      interactive,
     };
     config.processes[name] = { ...def, enabled: true };
     writeConfig();
-    const info = await pm2.start(def);
+
+    // Cross-manager cleanup: tear down the OTHER manager's copy of this process
+    // before starting, so there's no port conflict or duplicate entry.
+    if (interactive) {
+      try { await pm2.remove(name); } catch { }
+    } else {
+      ptym.remove(name);
+    }
+
+    const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+
+    if (interactive) {
+      // PTY processes: truncate the log first (clears stale crash cycles from
+      // the previous session) then write the STARTING banner and run auto-install.
+      // The PTY's scrollback is rebuilt from this file, so it will only show the
+      // current session's output.
+      const ptymLogsDir = path.join(DATA_DIR, "logs");
+      const ptymLog     = path.join(ptymLogsDir, `${name}-out.log`);
+      try {
+        fs.mkdirSync(ptymLogsDir, { recursive: true });
+        fs.writeFileSync(ptymLog, "");  // fresh log for each explicit start
+        fs.appendFileSync(ptymLog, `\r\n\x1b[36;1m◆ STARTING ${name} [${ts}]\x1b[0m\r\n`);
+      } catch { }
+      const cwd = path.resolve(ROOT, def.cwd || path.join("apps", name));
+      _installing.add(name);
+      try {
+        await pm2._autoInstall(cwd, ptymLog);
+      } finally {
+        _installing.delete(name);
+      }
+    } else {
+      // PM2 processes: write banner to PM2 log dir before _autoInstall runs.
+      const logsDir = path.join(PM2_HOME, "logs");
+      const outLog  = path.join(logsDir, `${name}-out.log`);
+      try {
+        fs.mkdirSync(logsDir, { recursive: true });
+        fs.appendFileSync(outLog, `\r\n\x1b[36;1m◆ STARTING ${name} [${ts}]\x1b[0m\r\n`);
+      } catch { }
+    }
+
+    const info = interactive ? ptym.start(def) : await pm2.start(def);
     broadcast();
     res.json(info);
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -198,7 +268,8 @@ app.post("/api/processes/:name/restart", async (req, res) => {
   try {
     const { name } = req.params;
     if (config.processes[name]) { config.processes[name].enabled = true; writeConfig(); }
-    const info = await pm2.restart(name);
+    const interactive = Boolean(config.processes[name]?.interactive);
+    const info = interactive ? ptym.restart(name) : await pm2.restart(name);
     broadcast();
     res.json(info);
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -208,7 +279,8 @@ app.post("/api/processes/:name/stop", async (req, res) => {
   try {
     const { name } = req.params;
     if (config.processes[name]) { config.processes[name].enabled = false; writeConfig(); }
-    const info = await pm2.stop(name);
+    const interactive = Boolean(config.processes[name]?.interactive);
+    const info = interactive ? ptym.stop(name) : await pm2.stop(name);
     broadcast();
     res.json(info);
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -219,7 +291,9 @@ app.delete("/api/processes/:name", async (req, res) => {
     const { name } = req.params;
     delete config.processes[name];
     writeConfig();
-    await pm2.remove(name);
+    // Always clean up both managers to prevent stale duplicates.
+    ptym.remove(name);
+    try { await pm2.remove(name); } catch { }
     broadcast();
     res.json({ ok: true });
   } catch (err) { res.status(400).json({ error: err.message }); }
@@ -227,35 +301,40 @@ app.delete("/api/processes/:name", async (req, res) => {
 
 app.get("/api/processes/:name/logs", async (req, res) => {
   try {
-    const lines = Math.min(Number(req.query.lines) || 150, 500);
-    res.json(await pm2.logs(req.params.name, lines));
+    const { name } = req.params;
+    const lines       = Math.min(Number(req.query.lines) || 150, 500);
+    const interactive = Boolean(config.processes[name]?.interactive);
+    res.json(interactive ? ptym.logs(name, lines) : await pm2.logs(name, lines));
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // ── Cloudflare API ────────────────────────────────────────────────────────────
-// ── WebSocket — PTY terminal sessions ─────────────────────────────────────────
-const termWss = new WebSocketServer({ noServer: true });
+// ── WebSocket servers ─────────────────────────────────────────────────────────
+const termWss      = new WebSocketServer({ noServer: true }); // free shell sessions
+const attachWss    = new WebSocketServer({ noServer: true }); // live PTY attach (interactive procs)
+const logstreamWss = new WebSocketServer({ noServer: true }); // live log tail (PM2 procs)
 
 server.on("upgrade", (req, socket, head) => {
   let url;
-  try { url = new URL(req.url, "http://x"); } catch {
-    socket.destroy(); return;
-  }
+  try { url = new URL(req.url, "http://x"); } catch { socket.destroy(); return; }
 
-  if (url.pathname !== "/api/terminal") {
-    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-    socket.destroy();
-    return;
-  }
-
-  // Validate token when auth is enabled.
+  // Validate auth token for any WebSocket endpoint.
   if (AUTH_USER && AUTH_PASS && url.searchParams.get("token") !== TERM_TOKEN) {
     socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
     socket.destroy();
     return;
   }
 
-  termWss.handleUpgrade(req, socket, head, ws => termWss.emit("connection", ws, req));
+  if (url.pathname === "/api/terminal") {
+    termWss.handleUpgrade(req, socket, head, ws => termWss.emit("connection", ws, req));
+  } else if (url.pathname === "/api/attach") {
+    attachWss.handleUpgrade(req, socket, head, ws => attachWss.emit("connection", ws, req));
+  } else if (url.pathname === "/api/logstream") {
+    logstreamWss.handleUpgrade(req, socket, head, ws => logstreamWss.emit("connection", ws, req));
+  } else {
+    socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    socket.destroy();
+  }
 });
 
 termWss.on("connection", (ws, req) => {
@@ -321,6 +400,81 @@ termWss.on("connection", (ws, req) => {
   ws.on("error", () => { try { proc.kill(); } catch { } });
 });
 
+// ── Attach — live PTY session on a managed interactive process ────────────────
+attachWss.on("connection", (ws, req) => {
+  let url;
+  try { url = new URL(req.url, "http://x"); } catch { ws.close(); return; }
+  const name = (url.searchParams.get("name") || "").trim();
+  if (!name) {
+    ws.send(JSON.stringify({ t: "error", msg: "name parameter is required" }));
+    ws.close();
+    return;
+  }
+  try {
+    ptym.attach(name, ws);
+  } catch (err) {
+    ws.send(JSON.stringify({ t: "error", msg: err.message }));
+    ws.close();
+  }
+});
+
+// ── Log stream — live tail of PM2 stdout + stderr log files ──────────────────
+// Uses deterministic paths so it works even before the process has been
+// registered with PM2 (e.g. while _autoInstall is running npm install).
+logstreamWss.on("connection", (ws, req) => {
+  let url;
+  try { url = new URL(req.url, "http://x"); } catch { ws.close(); return; }
+  const name = (url.searchParams.get("name") || "").trim();
+  if (!name) { ws.close(); return; }
+
+  const logsDir = path.join(PM2_HOME, "logs");
+  const outLog  = path.join(logsDir, `${name}-out.log`);
+  const errLog  = path.join(logsDir, `${name}-err.log`);
+
+  // Send the tail of the existing stdout log as initial scrollback.
+  // stderr is polled separately and appended live.
+  try {
+    const raw  = fs.readFileSync(outLog, "utf8");
+    const tail = raw.split("\n").slice(-200).join("\n");
+    if (tail && ws.readyState === 1) ws.send(Buffer.from(tail + "\n"), { binary: true });
+  } catch { }
+
+  // Track current read offsets for each file independently.
+  let outOffset = 0;
+  let errOffset = 0;
+  try { outOffset = fs.statSync(outLog).size; } catch { }
+  try { errOffset = fs.statSync(errLog).size; } catch { }
+
+  function pollOne(logFile, offsetRef) {
+    try {
+      const stat = fs.statSync(logFile);
+      if (stat.size > offsetRef.value) {
+        const len = stat.size - offsetRef.value;
+        const buf = Buffer.alloc(len);
+        const fd  = fs.openSync(logFile, "r");
+        fs.readSync(fd, buf, 0, len, offsetRef.value);
+        fs.closeSync(fd);
+        offsetRef.value = stat.size;
+        if (ws.readyState === 1) ws.send(buf, { binary: true });
+      } else if (stat.size < offsetRef.value) {
+        offsetRef.value = stat.size; // truncated / rotated
+      }
+    } catch { }
+  }
+
+  const outRef = { value: outOffset };
+  const errRef = { value: errOffset };
+
+  const timer = setInterval(() => {
+    if (ws.readyState !== 1) { clearInterval(timer); return; }
+    pollOne(outLog, outRef);
+    pollOne(errLog, errRef);
+  }, 300);
+
+  ws.on("close", () => clearInterval(timer));
+  ws.on("error", () => clearInterval(timer));
+});
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
 server.listen(PORT, "0.0.0.0", async () => {
   console.log(`[wispnodes] http://0.0.0.0:${PORT}`);
@@ -382,36 +536,138 @@ async function printHealthSummary() {
   ].forEach(l => console.log("[wispnodes]", l));
 }
 
+// ── PM2 lifecycle event tracking ──────────────────────────────────────────────
+// Detect state transitions in PM2-managed processes and write ANSI event lines
+// to their log files, mirroring the PtyManager event style.
+const _prevPm2States = new Map();
+
+function _pm2EventLine(type, detail = "") {
+  const EVT_COLORS = { STARTED: 32, STOPPED: 33, CRASHED: 31, RESTARTING: 36, MAX_RESTARTS: 31 };
+  const ts  = new Date().toISOString().replace("T", " ").slice(0, 19);
+  const col = EVT_COLORS[type] || 37;
+  return (
+    `\r\n\x1b[${col};1m◆ ${type}\x1b[0m` +
+    `\x1b[${col}m${detail ? ` — ${detail}` : ""} [${ts}]\x1b[0m\r\n`
+  );
+}
+
+function _trackPm2Events(procs) {
+  for (const p of procs) {
+    const prev = _prevPm2States.get(p.name);
+    const curr = p.status;
+    let type = null, detail = "";
+
+    if (prev === undefined) {
+      // First time we see this process after a server (re)start.
+      // If it's already online, emit STARTED so the logstream isn't silent.
+      if (curr === "online") {
+        type   = "STARTED";
+        detail = p.pid ? `pid=${p.pid}` : "";
+      }
+    } else if (prev !== curr) {
+      if (curr === "online") {
+        type   = "STARTED";
+        detail = p.pid ? `pid=${p.pid}` : "";
+      } else if (curr === "stopped" && prev === "online") {
+        type = "STOPPED";
+      } else if (curr === "errored") {
+        type   = "CRASHED";
+        detail = `restarts=${p.restarts}`;
+      }
+    }
+
+    if (type && p.outLog) {
+      try { fs.appendFileSync(p.outLog, _pm2EventLine(type, detail)); } catch { }
+    }
+    _prevPm2States.set(p.name, curr);
+  }
+}
+
+let _syncReady = false; // true after first successful non-empty PM2 list
+
 async function syncApps() {
   if (syncing) return;
   syncing = true;
   try {
-    const procs   = await pm2.list();
-    const running = new Set(procs.map(p => p.name));
+    // If PM2 throws (stream error etc.), skip this tick entirely.
+    const procs = await pm2.list().catch(() => null);
+    if (!procs) return;
+
+    // Count only non-interactive enabled processes — interactive ones are managed by ptym.
+    const enabledPm2Count = Object.values(config.processes)
+      .filter(d => d.enabled && !d.interactive).length;
+    if (_syncReady && procs.length === 0 && enabledPm2Count > 0) return;
+    if (procs.length > 0) _syncReady = true;
+
+    const byName = new Map(procs.map(p => [p.name, p]));
     for (const [name, def] of Object.entries(config.processes)) {
-      if (def.enabled && !running.has(name)) {
+      if (!def.enabled) continue;
+      if (def.interactive) {
+        // Interactive processes are owned by PtyManager — start if absent.
+        // Skip if npm install is currently running for this app (race guard).
+        if (!ptym.has(name) && !_installing.has(name)) {
+          slog("info", `auto-starting interactive "${name}"…`);
+          try { ptym.start(def); } catch (err) { slog("error", `auto-start "${name}" failed: ${err.message}`); }
+        }
+      } else if (!byName.has(name)) {
+        // Non-interactive: only start if completely absent from PM2.
         slog("info", `auto-starting "${name}"…`);
-        await pm2.start(def).catch(err => {
-          slog("error", `auto-start "${name}" failed: ${err.message}`);
-        });
+        await pm2.start(def).catch(err => slog("error", `auto-start "${name}" failed: ${err.message}`));
       }
     }
   } finally { syncing = false; }
 }
 
+let _prevNet = null;
+function readNetStats() {
+  if (process.platform !== "linux") return null;
+  try {
+    const lines = fs.readFileSync("/proc/net/dev", "utf8").split("\n").slice(2);
+    let rx = 0, tx = 0;
+    for (const line of lines) {
+      const p = line.trim().split(/\s+/);
+      if (p.length < 10) continue;
+      const iface = p[0].replace(/:$/, "");
+      if (iface === "lo") continue;
+      rx += Number(p[1]);
+      tx += Number(p[9]);
+    }
+    const now = Date.now();
+    let rxRate = 0, txRate = 0;
+    if (_prevNet) {
+      const dt = (now - _prevNet.ts) / 1000;
+      if (dt > 0) { rxRate = Math.max(0, (rx - _prevNet.rx) / dt); txRate = Math.max(0, (tx - _prevNet.tx) / dt); }
+    }
+    _prevNet = { rx, tx, ts: now };
+    return { rxRate, txRate };
+  } catch { return null; }
+}
+
 async function getState() {
-  const [procs, discovered] = await Promise.all([pm2.list().catch(() => []), Promise.resolve(pm2.discover())]);
-  const running = new Set(procs.map(p => p.name));
+  const [pm2Procs, discovered] = await Promise.all([
+    pm2.list().catch(() => []),
+    Promise.resolve(pm2.discover()),
+  ]);
+  _trackPm2Events(pm2Procs);
+  const ptyProcs     = ptym.list();
+  // PTY processes take precedence: hide any PM2 entry with the same name.
+  const ptyNames     = new Set(ptyProcs.map(p => p.name));
+  const filteredPm2  = pm2Procs.filter(p => !ptyNames.has(p.name));
+  const procs        = [...filteredPm2, ...ptyProcs];
+  const running      = new Set(procs.map(p => p.name));
+  const runningPty   = new Set(ptyProcs.map(p => p.name));
   return {
     processes: procs,
     discovered: discovered.map(d => ({
       ...d,
-      enabled: Boolean(config.processes[d.name]?.enabled),
-      port:    config.processes[d.name]?.port || "",
-      running: running.has(d.name)
+      enabled:          Boolean(config.processes[d.name]?.enabled),
+      port:             config.processes[d.name]?.port || "",
+      running:          running.has(d.name),
+      runningInteractive: runningPty.has(d.name),
     })),
     cloudflare: { ...cf.status(), recentLogs: cf.recentLogs() },
     terminal:   { enabled: Boolean(pty) },
+    network:    readNetStats(),
     meta:       { appsDir: path.relative(ROOT, APPS_DIR) || ".", dataDir: path.relative(ROOT, DATA_DIR) || "." }
   };
 }

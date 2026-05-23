@@ -4,9 +4,6 @@
   // ── DOM ───────────────────────────────────────────────────────────────────
   const connEl       = document.getElementById("conn");
   const cfBadge      = document.getElementById("cf-badge");
-  const cfPanel      = document.getElementById("cf-panel");
-  const cfLogs       = document.getElementById("cf-logs");
-  const formStart    = document.getElementById("form-start");
   const discoveredEl = document.getElementById("discovered");
   const appsDirHint  = document.getElementById("apps-dir-hint");
   const processesEl  = document.getElementById("processes");
@@ -18,6 +15,7 @@
   const toastsEl     = document.getElementById("toasts");
   const btnNewTerm   = document.getElementById("btn-new-term");
   const btnHealth    = document.getElementById("btn-health");
+  const netStatsEl   = document.getElementById("net-stats");
 
   // ── Terminal colour theme ─────────────────────────────────────────────────
   const TERM_THEME = {
@@ -37,9 +35,9 @@
   let termToken   = null;
   let termEnabled = false;
 
-  // Log tab state
-  let logTarget = null;
-  let logTimer  = null;
+  // CF log tab state
+  const CF_LOG_TAB_ID = "tab-cf-log";
+  let cfLogOpened = false;
 
   // Panel height
   let panelHeight = 340;
@@ -72,43 +70,75 @@
     renderProcesses(state.processes || []);
     renderDiscovered(state.discovered || []);
     renderCloudflare(state.cloudflare || {});
+    renderNetwork(state.network || null);
     if (state.meta) appsDirHint.textContent = state.meta.appsDir;
     if (state.terminal) termEnabled = state.terminal.enabled;
+  }
+
+  function renderNetwork(net) {
+    if (!net) { netStatsEl.hidden = true; return; }
+    netStatsEl.hidden = false;
+    netStatsEl.innerHTML =
+      `<span class="net-rx">↓ ${fmtRate(net.rxRate)}</span>` +
+      `<span class="net-tx">↑ ${fmtRate(net.txRate)}</span>`;
   }
 
   function renderProcesses(procs) {
     procCount.textContent = procs.length;
     if (!procs.length) {
-      processesEl.innerHTML = '<div class="empty">No running processes. Use the form on the left to start one.</div>';
+      processesEl.innerHTML = '<div class="empty" style="padding:24px 16px">No running processes. Start one from the Discovered Apps panel.</div>';
       return;
     }
-    processesEl.innerHTML = procs.map(p => {
-      const on  = p.status === "online";
-      const cls = on ? "badge-online" : p.status === "stopped" ? "badge-stopped" : "badge-offline";
-      const sel = logTarget === p.name ? " selected" : "";
+    const rows = procs.map(p => {
+      const on     = p.status === "online";
+      const dotCls = on                        ? "dot-online"
+                   : p.status === "stopped"   ? "dot-stopped"
+                   : p.status === "launching" ? "dot-launching"
+                   : "dot-errored";
+      const shellDisabled = termEnabled ? "" : " disabled";
+      const shellTitle    = termEnabled ? "Open shell in this app's directory" : "Install node-pty to enable terminal";
+      const attachTitle   = p.interactive ? "Attach live terminal (PTY)" : "Stream live output";
       return `
-      <div class="proc-card${sel}">
-        <div class="proc-header">
-          <span class="proc-name">${x(p.name)}</span>
-          <span class="badge ${cls}">${x(p.status)}</span>
-        </div>
-        ${p.cwd ? `<div class="proc-cwd">${x(p.cwd)}</div>` : ""}
-        ${on ? `
-        <div class="proc-stats">
-          <div class="stat"><span class="stat-val">${p.cpu}%</span><span class="stat-lbl">CPU</span></div>
-          <div class="stat"><span class="stat-val">${fmtMem(p.memory)}</span><span class="stat-lbl">MEM</span></div>
-          <div class="stat"><span class="stat-val">${p.restarts}</span><span class="stat-lbl">Restarts</span></div>
-          ${p.port ? `<div class="stat"><span class="stat-val">${x(p.port)}</span><span class="stat-lbl">Port</span></div>` : ""}
-        </div>` : ""}
-        <div class="proc-actions">
-          <button class="btn btn-sm" data-act="logs"    data-name="${x(p.name)}">Logs</button>
-          <button class="btn btn-sm btn-ghost" data-act="shell" data-name="${x(p.name)}" data-cwd="${x(p.cwd || ".")}" ${termEnabled ? "" : "disabled"} title="${termEnabled ? "Open shell in this app's directory" : "Install node-pty to enable terminal"}">Shell</button>
-          <button class="btn btn-sm" data-act="restart" data-name="${x(p.name)}">Restart</button>
-          <button class="btn btn-sm btn-ghost"  data-act="stop"    data-name="${x(p.name)}">Stop</button>
-          <button class="btn btn-sm btn-danger" data-act="delete"  data-name="${x(p.name)}">Delete</button>
-        </div>
-      </div>`;
+      <tr>
+        <td class="proc-td-dot"><span class="proc-dot ${dotCls}" title="${x(p.status)}"></span></td>
+        <td class="proc-td-name">
+          <div class="proc-info">
+            <span class="proc-name">${x(p.name)}</span>
+            ${p.cwd ? `<span class="proc-cwd">${x(p.cwd)}${p.dirSize ? ` · ${fmtMem(p.dirSize)}` : ""}</span>` : ""}
+          </div>
+        </td>
+        <td class="proc-metric${on ? "" : " dim"}">${on && p.uptime ? fmtUptime(p.uptime) : "—"}</td>
+        <td class="proc-metric${on ? "" : " dim"}">${on ? p.cpu + "%" : "—"}</td>
+        <td class="proc-metric${on ? "" : " dim"}">${on ? fmtMem(p.memory) : "—"}</td>
+        <td class="proc-metric${on ? "" : " dim"}">${on && p.port ? x(p.port) : "—"}</td>
+        <td class="proc-restarts">${p.restarts}</td>
+        <td class="proc-td-btns">
+          <div class="proc-btns">
+            <button class="btn btn-xs btn-pty"   data-act="attach"  data-name="${x(p.name)}" data-interactive="${p.interactive ? "1" : ""}" title="${attachTitle}">Attach</button>
+            <button class="btn btn-xs btn-ghost"  data-act="shell"   data-name="${x(p.name)}" data-cwd="${x(p.cwd || ".")}"${shellDisabled} title="${shellTitle}">Shell</button>
+            <button class="btn btn-xs btn-ghost"  data-act="restart" data-name="${x(p.name)}" title="Restart">↺</button>
+            <button class="btn btn-xs btn-ghost"  data-act="stop"    data-name="${x(p.name)}" title="Stop">■</button>
+            <button class="btn btn-xs btn-danger" data-act="delete"  data-name="${x(p.name)}" title="Delete">✕</button>
+          </div>
+        </td>
+      </tr>`;
     }).join("");
+    processesEl.innerHTML = `
+      <table class="proc-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>Name</th>
+            <th class="ta-r">Uptime</th>
+            <th class="ta-r">CPU</th>
+            <th class="ta-r">Memory</th>
+            <th class="ta-r">Port</th>
+            <th class="ta-r">Restarts</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
   }
 
   function renderDiscovered(apps) {
@@ -116,44 +146,82 @@
       discoveredEl.innerHTML = '<div class="empty">No app folders found.</div>';
       return;
     }
-    discoveredEl.innerHTML = apps.map(a => `
+    discoveredEl.innerHTML = apps.map(a => {
+      // Show green dot only when running interactively (PTY).
+      // When running as PM2 (non-interactive) the user still needs to be able
+      // to click Start to switch to PTY / interactive mode.
+      const dot    = a.runningInteractive ? '<span style="color:var(--green);font-size:10px" title="Running (interactive)">●</span>' : "";
+      const label  = a.running && !a.runningInteractive ? "Restart as PTY" : "Start";
+      const disabl = a.runningInteractive ? "disabled" : "";
+      const title  = a.runningInteractive
+        ? "Already running interactively — use Attach to connect"
+        : a.running
+          ? "Running as PM2 — click to restart as interactive PTY process"
+          : "";
+      return `
       <div class="app-row">
         <div class="app-info">
-          <div class="app-name">${x(a.name)} ${a.running ? '<span style="color:var(--green);font-size:10px" title="Running">●</span>' : ""}</div>
+          <div class="app-name">${x(a.name)} ${dot}</div>
           <div class="app-cmd">${x(a.command || "no command detected")}</div>
         </div>
         <div class="app-actions">
           <button class="btn btn-xs btn-primary" data-act="quick-start"
             data-name="${x(a.name)}" data-cwd="${x(a.cwd)}" data-cmd="${x(a.command || "")}" data-port="${x(a.port || "")}"
-            ${a.running ? "disabled" : ""}>Start</button>
-          <button class="btn btn-xs btn-ghost" data-act="configure"
-            data-name="${x(a.name)}" data-cwd="${x(a.cwd)}" data-cmd="${x(a.command || "")}" data-port="${x(a.port || "")}">Edit</button>
+            ${disabl} title="${x(title)}">${label}</button>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   }
 
   function renderCloudflare(cf) {
     const configured = Boolean(cf.configured);
     const running    = Boolean(cf.running);
     const external   = Boolean(cf.external);
+    const showLog    = configured && !external;
 
-    cfBadge.hidden = false;
-    if (!configured && !running) {
-      cfBadge.hidden = true;
-    } else if (external) {
-      cfBadge.textContent = "● Tunnel running (external)";
-      cfBadge.style.color = "var(--green)";
-    } else if (running) {
-      cfBadge.textContent = "● Tunnel running";
-      cfBadge.style.color = "var(--green)";
-    } else if (configured) {
-      cfBadge.textContent = "○ Tunnel stopped";
-      cfBadge.style.color = "var(--muted)";
+    cfBadge.hidden = !configured && !running;
+    if (!cfBadge.hidden) {
+      if (external) {
+        cfBadge.textContent = "● Tunnel (external)";
+        cfBadge.style.color = "var(--green)";
+      } else if (running) {
+        cfBadge.textContent = "● Tunnel";
+        cfBadge.style.color = "var(--green)";
+      } else {
+        cfBadge.textContent = "○ Tunnel stopped";
+        cfBadge.style.color = "var(--muted)";
+      }
+      cfBadge.style.cursor = showLog ? "pointer" : "";
+      cfBadge.title = showLog ? "Click to view tunnel logs" : "";
     }
 
-    // Only show log panel if WispNodes manages the tunnel.
-    cfPanel.hidden = !configured || external;
-    if (!cfPanel.hidden && cf.recentLogs) cfLogs.textContent = cf.recentLogs;
+    if (showLog && cf.recentLogs) {
+      if (!cfLogOpened) { openCfLogTab(); cfLogOpened = true; }
+      updateCfLogTab(cf.recentLogs);
+    }
+  }
+
+  function openCfLogTab() {
+    if (tabs.has(CF_LOG_TAB_ID)) { activateTab(CF_LOG_TAB_ID); showPanel(); return; }
+    const pane = document.createElement("div");
+    pane.className = "tab-pane log-pane";
+    pane.innerHTML = `
+      <div class="log-toolbar">
+        <span class="log-proc-tag">Cloudflare Tunnel</span>
+      </div>
+      <pre class="log-view" id="cf-log-view"></pre>`;
+    tabs.set(CF_LOG_TAB_ID, { id: CF_LOG_TAB_ID, type: "cflog", title: "Tunnel", pane });
+    tabContent.appendChild(pane);
+    activateTab(CF_LOG_TAB_ID);
+    showPanel();
+  }
+
+  function updateCfLogTab(logs) {
+    const view = document.getElementById("cf-log-view");
+    if (!view) return;
+    const atBottom = view.scrollHeight - view.scrollTop <= view.clientHeight + 40;
+    view.textContent = logs || "(no logs yet)";
+    if (atBottom) view.scrollTop = view.scrollHeight;
   }
 
   // ── Delegated clicks ──────────────────────────────────────────────────────
@@ -163,30 +231,29 @@
     const act  = btn.dataset.act;
     const name = btn.dataset.name;
 
-    if (act === "configure") {
-      document.getElementById("i-name").value  = name;
-      document.getElementById("i-cwd").value   = btn.dataset.cwd  || "";
-      document.getElementById("i-cmd").value   = btn.dataset.cmd  || "";
-      document.getElementById("i-port").value  = btn.dataset.port || "";
-      formStart.scrollIntoView({ behavior: "smooth", block: "start" });
-      document.getElementById("i-port").focus();
+    if (act === "delete" && !confirm(`Delete "${name}" from PM2?\nThis cannot be undone.`)) return;
+
+    // quick-start: open an interactive attach tab immediately so the user can
+    // watch install progress and type to the process once it starts.
+    if (act === "quick-start") {
+      btn.disabled    = true;
+      btn.textContent = "Starting…";
+      openAttachTab(name, true); // interactive — user can type
+      call("POST", `/api/processes/${enc(name)}/start`, {
+        name, cwd: btn.dataset.cwd, command: btn.dataset.cmd,
+        port: btn.dataset.port, interactive: true
+      }).catch(err => {
+        toast(err.message, "error");
+        btn.disabled    = false;
+        btn.textContent = "Start";
+      });
       return;
     }
 
-    if (act === "delete" && !confirm(`Delete "${name}" from PM2?\nThis cannot be undone.`)) return;
-
     await withBtn(btn, async () => {
       switch (act) {
-        case "quick-start":
-          await call("POST", `/api/processes/${enc(name)}/start`, {
-            name, cwd: btn.dataset.cwd, command: btn.dataset.cmd, port: btn.dataset.port
-          });
-          toast(`Started ${name}`, "success");
-          break;
-
-        case "logs":
-          openLogTab(name);
-          btn.closest(".proc-card")?.classList.add("selected");
+        case "attach":
+          openAttachTab(name, btn.dataset.interactive === "1");
           break;
 
         case "shell":
@@ -196,7 +263,6 @@
         case "restart":
           await call("POST", `/api/processes/${enc(name)}/restart`);
           toast(`Restarted ${name}`, "success");
-          if (logTarget === name) pollLogs();
           break;
 
         case "stop":
@@ -207,30 +273,13 @@
         case "delete":
           await call("DELETE", `/api/processes/${enc(name)}`);
           toast(`Deleted ${name}`, "info");
-          if (logTarget === name) closeLogTab();
           break;
       }
     });
   });
 
-  // ── Start form ────────────────────────────────────────────────────────────
-  formStart.addEventListener("submit", async e => {
-    e.preventDefault();
-    const btn = formStart.querySelector("[type=submit]");
-    const fd  = new FormData(formStart);
-    const payload = {
-      name:    String(fd.get("name")    || "").trim(),
-      cwd:     String(fd.get("cwd")     || "").trim(),
-      command: String(fd.get("command") || "").trim(),
-      port:    String(fd.get("port")    || "").trim()
-    };
-    if (!payload.name) { toast("Name is required.", "error"); return; }
-    await withBtn(btn, async () => {
-      await call("POST", `/api/processes/${enc(payload.name)}/start`, payload);
-      formStart.reset();
-      toast(`Started ${payload.name}`, "success");
-    });
-  });
+  // ── CF badge click → open tunnel log tab ─────────────────────────────────
+  cfBadge.addEventListener("click", () => { if (cfLogOpened) openCfLogTab(); });
 
   // ── Health button ─────────────────────────────────────────────────────────
   btnHealth.addEventListener("click", () => openHealthTab());
@@ -255,42 +304,6 @@
   });
 
   // ── Tab management ────────────────────────────────────────────────────────
-  const LOG_TAB_ID = "tab-log";
-
-  function openLogTab(processName) {
-    logTarget = processName;
-    if (!tabs.has(LOG_TAB_ID)) {
-      const pane = document.createElement("div");
-      pane.className = "tab-pane log-pane";
-      pane.innerHTML = `
-        <div class="log-toolbar">
-          <span class="log-proc-tag" id="log-proc-tag">${x(processName)}</span>
-          <label class="toggle" style="margin-left:auto">
-            <input id="autoscroll" type="checkbox" checked> auto-scroll
-          </label>
-          <button class="btn btn-xs btn-ghost" data-act-panel="close-log">✕</button>
-        </div>
-        <pre class="log-view" id="log-view"></pre>`;
-      tabs.set(LOG_TAB_ID, { id: LOG_TAB_ID, type: "log", title: processName, pane });
-      tabContent.appendChild(pane);
-
-      pane.querySelector("[data-act-panel='close-log']").addEventListener("click", closeLogTab);
-    } else {
-      tabs.get(LOG_TAB_ID).title = processName;
-      const tag = document.getElementById("log-proc-tag");
-      if (tag) tag.textContent = processName;
-    }
-    activateTab(LOG_TAB_ID);
-    showPanel();
-    startLogPolling();
-  }
-
-  function closeLogTab() {
-    stopLogPolling();
-    logTarget = null;
-    document.querySelectorAll(".proc-card.selected").forEach(el => el.classList.remove("selected"));
-    closeTab(LOG_TAB_ID);
-  }
 
   function openShellTab(cwd, title) {
     const id   = "tab-shell-" + Date.now();
@@ -304,6 +317,128 @@
     spawnTerminal(tab);
   }
 
+  function openAttachTab(name, interactive = false) {
+    const id = `tab-attach-${name}`;
+    if (tabs.has(id)) { activateTab(id); showPanel(); return; }
+    const pane = document.createElement("div");
+    pane.className = "tab-pane shell-pane";
+    const tab = { id, type: "attach", title: name, name, interactive, pane, term: null, fitAddon: null, ws: null };
+    tabs.set(id, tab);
+    tabContent.appendChild(pane);
+    activateTab(id);
+    showPanel();
+    spawnAttachTerminal(tab);
+  }
+
+  function spawnAttachTerminal(tab) {
+    const term = new Terminal({
+      cursorBlink:     tab.interactive,
+      disableStdin:    !tab.interactive,
+      fontSize:        13,
+      fontFamily:      '"JetBrains Mono","SFMono-Regular",Consolas,monospace',
+      theme:           TERM_THEME,
+      scrollback:      5000,
+      convertEol:      !tab.interactive,
+      macOptionIsMeta: true
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    tab.term     = term;
+    tab.fitAddon = fitAddon;
+
+    renderTabBar();
+
+    requestAnimationFrame(() => {
+      if (!tabs.has(tab.id)) return;
+
+      term.open(tab.pane);
+      fitAddon.fit();
+
+      const ro = new ResizeObserver(() => {
+        if (activeTabId === tab.id) fitAddon.fit();
+      });
+      ro.observe(tab.pane);
+
+      // Click anywhere in the pane to restore focus
+      tab.pane.addEventListener("click", () => term.focus());
+
+      const proto  = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsPath = tab.interactive ? "/api/attach" : "/api/logstream";
+
+      // Register input handlers ONCE here, outside the reconnect loop.
+      // tab.ws is kept current by connectWs() so the closures always
+      // write to the live WebSocket.
+      if (tab.interactive) {
+        term.onData(data => {
+          if (tab.ws && tab.ws.readyState === WebSocket.OPEN)
+            tab.ws.send(JSON.stringify({ t: "i", d: data }));
+        });
+        term.onResize(({ cols, rows }) => {
+          if (tab.ws && tab.ws.readyState === WebSocket.OPEN)
+            tab.ws.send(JSON.stringify({ t: "resize", cols, rows }));
+        });
+        term.focus();
+      }
+
+      function connectWs() {
+        if (!tabs.has(tab.id)) return;
+        const params = new URLSearchParams({ name: tab.name, token: termToken || "" });
+        const ws     = new WebSocket(`${proto}//${location.host}${wsPath}?${params}`);
+        ws.binaryType = "arraybuffer";
+        tab.ws = ws;
+
+        // Set when server says process not found — suppress error, retry quietly.
+        let pendingStart = false;
+
+        ws.onopen = () => {
+          if (tab.interactive) {
+            ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
+            term.focus();
+          }
+        };
+
+        ws.onmessage = e => {
+          if (e.data instanceof ArrayBuffer) {
+            term.write(new Uint8Array(e.data));
+          } else {
+            try {
+              const msg = JSON.parse(e.data);
+              if (msg.t === "error") {
+                if (tab.interactive && /not found/i.test(msg.msg || "")) {
+                  pendingStart = true; // process hasn't started yet, will retry
+                } else {
+                  term.write(`\r\n\x1b[31mError: ${msg.msg}\x1b[0m\r\n`);
+                }
+              }
+            } catch { }
+          }
+        };
+
+        ws.onclose = () => {
+          if (!tabs.has(tab.id)) return;
+          if (!tab.interactive) {
+            // Logstream: always reconnect
+            setTimeout(() => connectWs(), 1500);
+          } else if (pendingStart) {
+            // Interactive, process not started yet: show once then retry
+            if (!tab._shownWaiting) {
+              tab._shownWaiting = true;
+              term.write("\x1b[90mPreparing process…\x1b[0m\r\n");
+            }
+            setTimeout(() => connectWs(), 1500);
+          } else {
+            // Interactive, was attached and process stopped/detached
+            term.write("\r\n\x1b[90m── detached ──\x1b[0m\r\n");
+          }
+        };
+
+        ws.onerror = () => {}; // onclose fires after onerror
+      }
+
+      connectWs();
+    });
+  }
+
   function activateTab(id) {
     if (!tabs.has(id)) return;
     activeTabId = id;
@@ -311,27 +446,19 @@
       t.pane.classList.toggle("active", tid === id);
     }
     renderTabBar();
-    // Re-fit the terminal after the pane becomes visible.
     const tab = tabs.get(id);
-    if (tab && tab.type === "shell" && tab.fitAddon) {
+    if (tab && (tab.type === "shell" || tab.type === "attach") && tab.fitAddon) {
       requestAnimationFrame(() => tab.fitAddon.fit());
     }
-    // Resume log polling if log tab is activated.
-    if (id === LOG_TAB_ID && logTarget) startLogPolling();
-    else if (id !== LOG_TAB_ID) stopLogPolling();
   }
 
   function closeTab(id) {
     const tab = tabs.get(id);
     if (!tab) return;
-    // Clean up shell resources.
-    if (tab.type === "shell") {
-      if (tab.ws)   { try { tab.ws.close();  } catch { } }
-      if (tab.term) { try { tab.term.dispose(); } catch { } }
-    }
+    if (tab.ws)   { try { tab.ws.close();   } catch { } }
+    if (tab.term) { try { tab.term.dispose(); } catch { } }
     tab.pane.remove();
     tabs.delete(id);
-    // Activate the next available tab, or hide the panel.
     if (activeTabId === id) {
       const remaining = [...tabs.keys()];
       if (remaining.length) activateTab(remaining[remaining.length - 1]);
@@ -345,7 +472,9 @@
     for (const [id, tab] of tabs) {
       const isLog    = tab.type === "log";
       const isHealth = tab.type === "health";
-      const icon     = isHealth ? "⚙" : isLog ? "≡" : "$";
+      const isCfLog  = tab.type === "cflog";
+      const isAttach = tab.type === "attach";
+      const icon     = isHealth ? "⚙" : isCfLog ? "☁" : isLog ? "≡" : isAttach ? "⬡" : "$";
       const active  = id === activeTabId ? " active" : "";
       tabEls.push(`
         <button class="tab${active}" data-tab-id="${x(id)}">
@@ -369,9 +498,7 @@
     tabBar.querySelectorAll("[data-close-tab]").forEach(el => {
       el.addEventListener("click", e => {
         e.stopPropagation();
-        const id = el.dataset.closeTab;
-        if (id === LOG_TAB_ID) closeLogTab();
-        else closeTab(id);
+        closeTab(el.dataset.closeTab);
       });
     });
 
@@ -435,84 +562,77 @@
   // ── xterm terminal ────────────────────────────────────────────────────────
   function spawnTerminal(tab) {
     const term = new Terminal({
-      cursorBlink:       true,
-      fontSize:          13,
-      fontFamily:        '"JetBrains Mono","SFMono-Regular",Consolas,monospace',
-      theme:             TERM_THEME,
-      scrollback:        5000,
-      allowTransparency: true,
-      macOptionIsMeta:   true
+      cursorBlink:     true,
+      fontSize:        13,
+      fontFamily:      '"JetBrains Mono","SFMono-Regular",Consolas,monospace',
+      theme:           TERM_THEME,
+      scrollback:      5000,
+      macOptionIsMeta: true
     });
     const fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
-    term.open(tab.pane);
-    fitAddon.fit();
-
     tab.term     = term;
     tab.fitAddon = fitAddon;
 
-    // Fit when the pane resizes.
-    const ro = new ResizeObserver(() => {
-      if (activeTabId === tab.id && fitAddon) fitAddon.fit();
-    });
-    ro.observe(tab.pane);
-
-    // WebSocket connection.
-    const proto  = location.protocol === "https:" ? "wss:" : "ws:";
-    const params = new URLSearchParams({ cwd: tab.cwd, token: termToken || "" });
-    const ws     = new WebSocket(`${proto}//${location.host}/api/terminal?${params}`);
-    ws.binaryType = "arraybuffer";
-    tab.ws = ws;
-
-    term.write("\x1b[90mConnecting…\x1b[0m\r\n");
-
-    ws.onopen = () => {
-      term.write("\x1b[2K\x1b[1A\x1b[2K"); // clear "Connecting…" line
-      ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
-    };
-
-    ws.onmessage = e => {
-      if (e.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(e.data));
-      } else {
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.t === "exit") {
-            term.write(`\r\n\x1b[90m── process exited (${msg.code}) ──\x1b[0m\r\n`);
-          } else if (msg.t === "error") {
-            term.write(`\r\n\x1b[31mError: ${msg.msg}\x1b[0m\r\n`);
-          }
-        } catch { }
-      }
-    };
-
-    ws.onclose = () => {
-      term.write("\r\n\x1b[90m── connection closed ──\x1b[0m\r\n");
-    };
-
-    ws.onerror = () => {
-      term.write("\r\n\x1b[31m── WebSocket error ──\x1b[0m\r\n");
-    };
-
-    // Input: forward keystrokes to PTY.
-    term.onData(data => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ t: "i", d: data }));
-      }
-    });
-
-    // Resize: notify PTY.
-    term.onResize(({ cols, rows }) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ t: "resize", cols, rows }));
-      }
-    });
-
-    // Update tab title with the shell name.
     tabs.get(tab.id).title = `Shell: ${tab.cwd === "." ? "/" : tab.cwd}`;
     renderTabBar();
 
-    term.focus();
+    requestAnimationFrame(() => {
+      if (!tabs.has(tab.id)) return; // tab closed before RAF fired
+
+      term.open(tab.pane);
+      fitAddon.fit();
+
+      const ro = new ResizeObserver(() => {
+        if (activeTabId === tab.id) fitAddon.fit();
+      });
+      ro.observe(tab.pane);
+
+      // Click anywhere in the pane to restore focus
+      tab.pane.addEventListener("click", () => term.focus());
+
+      const proto  = location.protocol === "https:" ? "wss:" : "ws:";
+      const params = new URLSearchParams({ cwd: tab.cwd, token: termToken || "" });
+      const ws     = new WebSocket(`${proto}//${location.host}/api/terminal?${params}`);
+      ws.binaryType = "arraybuffer";
+      tab.ws = ws;
+
+      term.write("\x1b[90mConnecting…\x1b[0m\r\n");
+
+      ws.onopen = () => {
+        term.write("\x1b[2K\x1b[1A\x1b[2K"); // clear connecting line
+        ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
+        term.focus(); // re-assert focus once the shell is ready
+      };
+
+      ws.onmessage = e => {
+        if (e.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(e.data));
+        } else {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.t === "exit") {
+              term.write(`\r\n\x1b[90m── process exited (${msg.code}) ──\x1b[0m\r\n`);
+            } else if (msg.t === "error") {
+              term.write(`\r\n\x1b[31mError: ${msg.msg}\x1b[0m\r\n`);
+            }
+          } catch { }
+        }
+      };
+
+      ws.onclose = () => { term.write("\r\n\x1b[90m── connection closed ──\x1b[0m\r\n"); };
+      ws.onerror = () => { term.write("\r\n\x1b[31m── WebSocket error ──\x1b[0m\r\n"); };
+
+      term.onData(data => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "i", d: data }));
+      });
+
+      term.onResize(({ cols, rows }) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: "resize", cols, rows }));
+      });
+
+      term.focus();
+    });
   }
 
   // ── Health tab ────────────────────────────────────────────────────────────
@@ -604,32 +724,6 @@
       </div>`;
   }
 
-  // ── Log polling ───────────────────────────────────────────────────────────
-  function startLogPolling() {
-    stopLogPolling();
-    pollLogs();
-    logTimer = setInterval(pollLogs, 2000);
-  }
-
-  function stopLogPolling() {
-    clearInterval(logTimer);
-    logTimer = null;
-  }
-
-  async function pollLogs() {
-    if (!logTarget) return;
-    try {
-      const data = await call("GET", `/api/processes/${enc(logTarget)}/logs?lines=200`);
-      const text = [data.stdout, data.stderr].filter(Boolean).join("\n\n── stderr ──\n\n") || "(no output yet)";
-      const logView = document.getElementById("log-view");
-      if (!logView) return;
-      const autoscrollEl = document.getElementById("autoscroll");
-      const atBottom = logView.scrollHeight - logView.scrollTop <= logView.clientHeight + 80;
-      logView.textContent = text;
-      if (autoscrollEl && autoscrollEl.checked && atBottom) logView.scrollTop = logView.scrollHeight;
-    } catch { }
-  }
-
   // ── HTTP helper ───────────────────────────────────────────────────────────
   async function call(method, url, body) {
     const opts = { method };
@@ -684,6 +778,24 @@
     if (!b) return "0 B";
     const u = ["B","KB","MB","GB"];
     let i = 0, v = b;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
+  }
+
+  function fmtUptime(ms) {
+    if (!ms) return "—";
+    const s = Math.floor((Date.now() - ms) / 1000);
+    if (s < 0)     return "—";
+    if (s < 60)    return s + "s";
+    if (s < 3600)  return Math.floor(s / 60) + "m";
+    if (s < 86400) return Math.floor(s / 3600) + "h";
+    return Math.floor(s / 86400) + "d";
+  }
+
+  function fmtRate(bps) {
+    if (!bps || bps < 10) return "0 B/s";
+    const u = ["B/s","KB/s","MB/s"];
+    let i = 0, v = bps;
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return `${v.toFixed(i === 0 ? 0 : 1)} ${u[i]}`;
   }

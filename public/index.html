@@ -43,39 +43,11 @@
     <aside class="sidebar">
 
       <section class="panel">
-        <h2 class="panel-title">Start Process</h2>
-        <form id="form-start" novalidate>
-          <div class="field">
-            <label for="i-name">Name</label>
-            <input id="i-name" name="name" type="text" placeholder="my-app" autocomplete="off" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="i-cwd">Directory <em>optional</em></label>
-            <input id="i-cwd" name="cwd" type="text" placeholder="apps/my-app" autocomplete="off" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="i-cmd">Command <em>optional</em></label>
-            <input id="i-cmd" name="command" type="text" placeholder="npm start" autocomplete="off" spellcheck="false">
-          </div>
-          <div class="field">
-            <label for="i-port">Port <em>optional</em></label>
-            <input id="i-port" name="port" type="number" placeholder="3001" min="1" max="65535" autocomplete="off">
-          </div>
-          <button id="btn-start-submit" type="submit" class="btn btn-primary btn-block">Start Process</button>
-        </form>
-      </section>
-
-      <section class="panel">
         <div class="panel-header">
           <h2 class="panel-title">Discovered Apps</h2>
           <span id="apps-dir-hint" class="panel-hint"></span>
         </div>
         <div id="discovered" class="item-list"></div>
-      </section>
-
-      <section class="panel" id="cf-panel" hidden>
-        <h2 class="panel-title">Tunnel Logs</h2>
-        <pre id="cf-logs" class="log-mini"></pre>
       </section>
 
     </aside>
@@ -87,8 +59,9 @@
         <div class="panel-header">
           <h2 class="panel-title">Processes</h2>
           <span id="proc-count" class="count-badge">0</span>
+          <span id="net-stats" class="net-stats" hidden></span>
         </div>
-        <div id="processes" class="process-grid"></div>
+        <div id="processes" class="proc-list"></div>
       </section>
 
     </main>
